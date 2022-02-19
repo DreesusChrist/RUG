@@ -192,11 +192,11 @@ contract GTFORUG is Ownable {
     require(_amount > 0, "amount is 0");
 
     require(
-      IERC20(SB).allowance(msg.sender, address(this)) >= _amount,
+      IERC20(RUG).allowance(msg.sender, address(this)) >= _amount,
       "You need to approve this contract to spend your RUG"
     );
 
-    IERC20(SB).transferFrom(msg.sender, address(this), _amount);
+    IERC20(RUG).transferFrom(msg.sender, address(this), _amount);
 
     uint256 _value = _amount.mul(RFV).div( 100000 );
 
