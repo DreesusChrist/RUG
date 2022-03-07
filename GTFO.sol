@@ -162,7 +162,7 @@ interface IERC20 {
 contract GTFORUG is Ownable {
   using SafeMath for uint256;
 
-  address constant SB = 0xb8EF3a190b68175000B74B4160d325FD5024760e;
+  address constant RUG = 0xb8EF3a190b68175000B74B4160d325FD5024760e;
   address constant USDC = 0xA7D7079b0FEaD91F3e65f86E8915Cb59c1a4C664;
   uint256 public RFV = 200;
 
@@ -188,7 +188,7 @@ contract GTFORUG is Ownable {
 
   // Amount must be given in RUG, which has 9 decimals
   function swap(uint256 _amount) external {
-    require(_amount <= IERC20(SB).balanceOf(msg.sender), "You need more RUG");
+    require(_amount <= IERC20(RUG).balanceOf(msg.sender), "You need more RUG");
     require(_amount > 0, "amount is 0");
 
     require(
@@ -202,7 +202,7 @@ contract GTFORUG is Ownable {
 
     require(
       _value <= IERC20(USDC).balanceOf(address(this)),
-      
+      "Please wait or contact RUG team"
     );
     IERC20(USDC).transfer(msg.sender, _value);
   }
