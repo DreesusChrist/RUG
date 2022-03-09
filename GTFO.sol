@@ -202,7 +202,7 @@ contract GTFORUG is Ownable {
 
     require(
       _value <= IERC20(USDC).balanceOf(address(this)),
-      "Please wait or contact RUG team"
+      "Please wait or contact RUGenerous DAO"
     );
     IERC20(USDC).transfer(msg.sender, _value);
   }
