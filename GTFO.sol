@@ -164,11 +164,11 @@ contract GTFORUG is Ownable {
 
   address constant RUG = 0xb8EF3a190b68175000B74B4160d325FD5024760e;
   address constant USDC = 0xA7D7079b0FEaD91F3e65f86E8915Cb59c1a4C664;
-  uint256 public RFV = 200;
+  uint256 public RFV = 150;
 
   constructor() Ownable() {}
 
-  // _RFV must be given with 2 decimals -> $2.00 = 200
+  // _RFV must be given with 2 decimals -> $1.50 = 150
   function setRfv(uint256 _RFV) external onlyOwner {
     RFV = _RFV;
   }
