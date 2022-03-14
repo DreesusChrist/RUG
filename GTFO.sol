@@ -1,7 +1,3 @@
-/**
- *Submitted for verification at snowtrace.io on 2022-02-16
-*/
-
 //SPDX-License-Identifier: Unlicense
 pragma solidity ^0.8.0;
 
