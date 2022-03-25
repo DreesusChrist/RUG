@@ -62,7 +62,7 @@ contract GovernorRUGMegaDelegate is GovernorRUGMegaDelegateStorageV1, GovernorRU
 
         timelock = TimelockInterface(timelock_);
 
-        sRUG = sOHMInterface(sRUG_);
+        sRUG = sRUGInterface(sRUG_);
         RUGo= = RUGInterface(RUG_);
         votingPeriod = votingPeriod_;
         votingDelay = votingDelay_;
@@ -82,7 +82,7 @@ contract GovernorRUGMegaDelegate is GovernorRUGMegaDelegateStorageV1, GovernorRU
         // Reject proposals before initiating as Governor
         require(initialProposalId != 0, "GovernorOHMega::propose: Governor OHMega not active");
         /// @notice change from original contract
-        require(gOHM.getPriorVotes(msg.sender, sub256(block.number, 1)) > getVotesFromPercentOfsOHMSupply(proposalThreshold), "GovernorOHMega::propose: proposer votes below proposal threshold");
+        require(gOHM.getPriorVotes(msg.sender, sub256(block.number, 1)) > getVotesFromPercentOfsRUGSupply(proposalThreshold), "GovernorOHMega::propose: proposer votes below proposal threshold");
         require(targets.length == values.length && targets.length == signatures.length && targets.length == calldatas.length, "GovernorOHMega::propose: proposal function information arity mismatch");
         require(targets.length != 0, "GovernorOHMega::propose: must provide actions");
         require(targets.length <= proposalMaxOperations, "GovernorOHMega::propose: too many actions");
