@@ -1,101 +1,172 @@
 pragma solidity ^0.5.16;
 pragma experimental ABIEncoderV2;
 
-import "./GovernorRUGMegaInterfaces.sol";
-
-contract GovernorRUGMegaDelegate is GovernorRUGMegaDelegateStorageV1, GovernorRUGMegaEvents {
-
+contract GovernorAlpha {
     /// @notice The name of this contract
-    string public constant name = "RUG Governor Contract";
-
-    /// @notice The minimum setable proposal threshold
-    /// @notice change from original contract
-    uint public constant MIN_PROPOSAL_THRESHOLDPERCENT = 5000; // 0.50% of sRUG supply : In ten-thosandaths 5000 = 0.50%
-
-    /// @notice The maximum setable proposal threshold
-    /// @notice change from original contract
-    uint public constant MAX_PROPOSAL_THRESHOLDPERCENT = 10000; // 1.00% of sRUG circulating supply : In ten-thosandaths 10000 = 1.00%
-
-    /// @notice The minimum setable voting period
-    uint public constant MIN_VOTING_PERIOD = 5760; // About 24 hours
-
-    /// @notice The max setable voting period
-    uint public constant MAX_VOTING_PERIOD = 80640; // About 2 weeks
-
-    /// @notice The min setable voting delay
-    uint public constant MIN_VOTING_DELAY = 1;
-
-    /// @notice The max setable voting delay
-    uint public constant MAX_VOTING_DELAY = 40320; // About 1 week
+    string public constant name = "Olympus Governor RUG";
 
     /// @notice The percent of sRUG in support of a proposal required in order for a quorum to be reached and for a vote to succeed
     /// @notice change from original contract
-    uint public constant quorumPercent = 40000; // In ten-thosandaths 40000 = 4.00%
+    function quorumPercent() public pure returns (uint) { return 40000; } // In ten-thosandaths 40000 = 4.00%
+
+    /// @notice The maximum setable proposal threshold percent
+    /// @notice change from original contract
+    function proposalThresholdPercent() public pure returns (uint) { return 10000; } // 1.00% of sRUG circulating supply : In ten-thosandaths 10000 = 1.00%
 
     /// @notice The maximum number of actions that can be included in a proposal
-    uint public constant proposalMaxOperations = 10; // 10 actions
+    function proposalMaxOperations() public pure returns (uint) { return 10; } // 10 actions
+
+    /// @notice The delay before voting on a proposal may take place, once proposed
+    function votingDelay() public pure returns (uint) { return 1; } // 1 block
+
+    /// @notice The duration of voting on a proposal, in blocks
+    function votingPeriod() public pure returns (uint) { return 17280; } // ~3 days in blocks (assuming 15s blocks)
+
+    /// @notice The address of the Olympus Protocol Timelock
+    TimelockInterface public timelock;
+
+    /// @notice The address of the gRUG token
+    /// @notice change from original contract
+    gRUGInterface public gRUG;
+
+    /// @notice The address of the sRUG token
+    /// @notice change from original contract
+    sRUGInterface public sRUG;
+
+    /// @notice The address of the Governor Guardian
+    address public guardian;
+
+    /// @notice The total number of proposals
+    uint public proposalCount;
+
+    struct Proposal {
+        /// @notice Unique id for looking up a proposal
+        uint id;
+
+        /// @notice Creator of the proposal
+        address proposer;
+
+        /// @notice The timestamp that the proposal will be available for execution, set once the vote succeeds
+        uint eta;
+
+        /// @notice the ordered list of target addresses for calls to be made
+        address[] targets;
+
+        /// @notice The ordered list of values (i.e. msg.value) to be passed to the calls to be made
+        uint[] values;
+
+        /// @notice The ordered list of function signatures to be called
+        string[] signatures;
+
+        /// @notice The ordered list of calldata to be passed to each call
+        bytes[] calldatas;
+
+        /// @notice The block at which voting begins: holders must delegate their votes prior to this block
+        uint startBlock;
+
+        /// @notice The block at which voting ends: votes must be cast prior to this block
+        uint endBlock;
+
+        /// @notice Current number of votes in favor of this proposal
+        uint forVotes;
+
+        /// @notice Current number of votes in opposition to this proposal
+        uint againstVotes;
+
+        /// @notice Threshold of gRUG at start of proposal
+        /// @notice change from original contract
+        uint thresholdAtStart;
+
+        /// @notice Number of gRUG needed to pass vote
+        /// @notice change from original contract
+        uint votesNeeded;
+
+        /// @notice Flag marking whether the proposal has been canceled
+        bool canceled;
+
+        /// @notice Flag marking whether the proposal has been executed
+        bool executed;
+
+        /// @notice Receipts of ballots for the entire set of voters
+        mapping (address => Receipt) receipts;
+    }
+
+    /// @notice Ballot receipt record for a voter
+    struct Receipt {
+        /// @notice Whether or not a vote has been cast
+        bool hasVoted;
+
+        /// @notice Whether or not the voter supports the proposal
+        bool support;
+
+        /// @notice The number of votes the voter had, which were cast
+        uint votes;
+    }
+
+    /// @notice Possible states that a proposal may be in
+    enum ProposalState {
+        Pending,
+        Active,
+        Canceled,
+        Defeated,
+        Succeeded,
+        Queued,
+        Expired,
+        Executed
+    }
+
+    /// @notice The official record of all proposals ever proposed
+    mapping (uint => Proposal) public proposals;
+
+    /// @notice The latest proposal for each proposer
+    mapping (address => uint) public latestProposalIds;
 
     /// @notice The EIP-712 typehash for the contract's domain
     bytes32 public constant DOMAIN_TYPEHASH = keccak256("EIP712Domain(string name,uint256 chainId,address verifyingContract)");
 
     /// @notice The EIP-712 typehash for the ballot struct used by the contract
-    bytes32 public constant BALLOT_TYPEHASH = keccak256("Ballot(uint256 proposalId,uint8 support)");
+    bytes32 public constant BALLOT_TYPEHASH = keccak256("Ballot(uint256 proposalId,bool support)");
 
-    /**
-      * @notice Used to initialize the contract during delegator contructor
-      * @param timelock_ The address of the Timelock
-      * @param sRUG_ The address of the sRUG token
-      * @param RUG_ The address of the RUG token
-      * @param votingPeriod_ The initial voting period
-      * @param votingDelay_ The initial voting delay
-      * @param proposalThreshold_ The initial proposal threshold percent in ten-thousandths
-      */
-    function initialize(address timelock_, address sRUG_, address RUG_, uint votingPeriod_, uint votingDelay_, uint proposalThreshold_) public {
-        require(address(timelock) == address(0), "GovernorOHMega::initialize: can only initialize once");
-        require(msg.sender == admin, " RUG Governor Contract::initialize: admin only");
-        require(timelock_ != address(0), "RUG Governor Contract::initialize: invalid timelock address");
-        require(sRUG_ != address(0), "RUG Governor Contract::initialize: invalid sOHM address");
-        require(RUG_ != address(0), "RUG Governor Contract::initialize: invalid gOHM address");
-        require(votingPeriod_ >= MIN_VOTING_PERIOD && votingPeriod_ <= MAX_VOTING_PERIOD, "RUG Governor Contract::initialize: invalid voting period");
-        require(votingDelay_ >= MIN_VOTING_DELAY && votingDelay_ <= MAX_VOTING_DELAY, "RUG Governor Contract::initialize: invalid voting delay");
-        require(proposalThreshold_ >= MIN_PROPOSAL_THRESHOLDPERCENT && proposalThreshold_ <= MAX_PROPOSAL_THRESHOLDPERCENT, "GovernorOHMega::initialize: invalid proposal threshold");
+    /// @notice An event emitted when a new proposal is created
+    event ProposalCreated(uint id, address proposer, address[] targets, uint[] values, string[] signatures, bytes[] calldatas, uint startBlock, uint endBlock, string description);
 
+    /// @notice An event emitted when a vote has been cast on a proposal
+    event VoteCast(address voter, uint proposalId, bool support, uint votes);
+
+    /// @notice An event emitted when a proposal has been canceled
+    event ProposalCanceled(uint id);
+
+    /// @notice An event emitted when a proposal has been queued in the Timelock
+    event ProposalQueued(uint id, uint eta);
+
+    /// @notice An event emitted when a proposal has been executed in the Timelock
+    event ProposalExecuted(uint id);
+
+    constructor(address timelock_, address sRUG_, address gRUG_, address guardian_ ) public {
         timelock = TimelockInterface(timelock_);
-
+        /// @notice change from original contract
         sRUG = sRUGInterface(sRUG_);
-        RUGo= = RUGInterface(RUG_);
-        votingPeriod = votingPeriod_;
-        votingDelay = votingDelay_;
-        proposalThreshold = proposalThreshold_;
+        /// @notice change from original contract
+        gRUG = gRUGInterface(gRUG_);
+        guardian = guardian_;
     }
 
-    /**
-      * @notice Function used to propose a new proposal. Sender must have delegates above the proposal threshold
-      * @param targets Target addresses for proposal calls
-      * @param values Eth values for proposal calls
-      * @param signatures Function signatures for proposal calls
-      * @param calldatas Calldatas for proposal calls
-      * @param description String description of the proposal
-      * @return Proposal id of new proposal
-      */
     function propose(address[] memory targets, uint[] memory values, string[] memory signatures, bytes[] memory calldatas, string memory description) public returns (uint) {
-        // Reject proposals before initiating as Governor
-        require(initialProposalId != 0, "GovernorOHMega::propose: Governor OHMega not active");
         /// @notice change from original contract
-        require(gOHM.getPriorVotes(msg.sender, sub256(block.number, 1)) > getVotesFromPercentOfsRUGSupply(proposalThreshold), "GovernorOHMega::propose: proposer votes below proposal threshold");
-        require(targets.length == values.length && targets.length == signatures.length && targets.length == calldatas.length, "GovernorOHMega::propose: proposal function information arity mismatch");
-        require(targets.length != 0, "GovernorOHMega::propose: must provide actions");
-        require(targets.length <= proposalMaxOperations, "GovernorOHMega::propose: too many actions");
+        require(gRUG.getPriorVotes(msg.sender, sub256(block.number, 1)) > getVotesFromPercentOfsOHMSupply(proposalThresholdPercent()), "GovernorAlpha::propose: proposer votes below proposal threshold");
+        require(targets.length == values.length && targets.length == signatures.length && targets.length == calldatas.length, "GovernorAlpha::propose: proposal function information arity mismatch");
+        require(targets.length != 0, "GovernorAlpha::propose: must provide actions");
+        require(targets.length <= proposalMaxOperations(), "GovernorAlpha::propose: too many actions");
 
         uint latestProposalId = latestProposalIds[msg.sender];
         if (latestProposalId != 0) {
           ProposalState proposersLatestProposalState = state(latestProposalId);
-          require(proposersLatestProposalState != ProposalState.Active, "GovernorOHMega::propose: one live proposal per proposer, found an already active proposal");
-          require(proposersLatestProposalState != ProposalState.Pending, "GovernorOHMega::propose: one live proposal per proposer, found an already pending proposal");
+          require(proposersLatestProposalState != ProposalState.Active, "GovernorAlpha::propose: one live proposal per proposer, found an already active proposal");
+          require(proposersLatestProposalState != ProposalState.Pending, "GovernorAlpha::propose: one live proposal per proposer, found an already pending proposal");
         }
 
-        uint startBlock = add256(block.number, votingDelay);
-        uint endBlock = add256(startBlock, votingPeriod);
+        uint startBlock = add256(block.number, votingDelay());
+        uint endBlock = add256(startBlock, votingPeriod());
 
         proposalCount++;
         Proposal memory newProposal = Proposal({
@@ -110,11 +181,10 @@ contract GovernorRUGMegaDelegate is GovernorRUGMegaDelegateStorageV1, GovernorRU
             endBlock: endBlock,
             forVotes: 0,
             againstVotes: 0,
-            abstainVotes: 0,
             /// @notice change from original contract
-            thresholdAtStart: getVotesFromPercentOfsOHMSupply(proposalThreshold),
+            thresholdAtStart: getVotesFromPercentOfsRUGSupply(proposalThresholdPercent()),
             /// @notice change from original contract
-            votesNeeded: getVotesFromPercentOfsOHMSupply(quorumPercent),
+            votesNeeded: getVotesFromPercentOfsRUGSupply(quorumPercent()),
             canceled: false,
             executed: false
         });
@@ -122,36 +192,28 @@ contract GovernorRUGMegaDelegate is GovernorRUGMegaDelegateStorageV1, GovernorRU
         proposals[newProposal.id] = newProposal;
         latestProposalIds[newProposal.proposer] = newProposal.id;
 
-        emit ProposalCreated(newProposal.id, msg.sender, targets, values, signatures, calldatas, startBlock, endBlock, newProposal.votesNeeded, description);
+        emit ProposalCreated(newProposal.id, msg.sender, targets, values, signatures, calldatas, startBlock, endBlock, description);
         return newProposal.id;
     }
 
-    /**
-      * @notice Queues a proposal of state succeeded
-      * @param proposalId The id of the proposal to queue
-      */
-    function queue(uint proposalId) external {
-        require(state(proposalId) == ProposalState.Succeeded, "GovernorOHMega::queue: proposal can only be queued if it is succeeded");
+    function queue(uint proposalId) public {
+        require(state(proposalId) == ProposalState.Succeeded, "GovernorAlpha::queue: proposal can only be queued if it is succeeded");
         Proposal storage proposal = proposals[proposalId];
         uint eta = add256(block.timestamp, timelock.delay());
         for (uint i = 0; i < proposal.targets.length; i++) {
-            queueOrRevertInternal(proposal.targets[i], proposal.values[i], proposal.signatures[i], proposal.calldatas[i], eta);
+            _queueOrRevert(proposal.targets[i], proposal.values[i], proposal.signatures[i], proposal.calldatas[i], eta);
         }
         proposal.eta = eta;
         emit ProposalQueued(proposalId, eta);
     }
 
-    function queueOrRevertInternal(address target, uint value, string memory signature, bytes memory data, uint eta) internal {
-        require(!timelock.queuedTransactions(keccak256(abi.encode(target, value, signature, data, eta))), "GovernorOHMega::queueOrRevertInternal: identical proposal action already queued at eta");
+    function _queueOrRevert(address target, uint value, string memory signature, bytes memory data, uint eta) internal {
+        require(!timelock.queuedTransactions(keccak256(abi.encode(target, value, signature, data, eta))), "GovernorAlpha::_queueOrRevert: proposal action already queued at eta");
         timelock.queueTransaction(target, value, signature, data, eta);
     }
 
-    /**
-      * @notice Executes a queued proposal if eta has passed
-      * @param proposalId The id of the proposal to execute
-      */
-    function execute(uint proposalId) external payable {
-        require(state(proposalId) == ProposalState.Queued, "GovernorOHMega::execute: proposal can only be executed if it is queued");
+    function execute(uint proposalId) public payable {
+        require(state(proposalId) == ProposalState.Queued, "GovernorAlpha::execute: proposal can only be executed if it is queued");
         Proposal storage proposal = proposals[proposalId];
         proposal.executed = true;
         for (uint i = 0; i < proposal.targets.length; i++) {
@@ -160,16 +222,13 @@ contract GovernorRUGMegaDelegate is GovernorRUGMegaDelegateStorageV1, GovernorRU
         emit ProposalExecuted(proposalId);
     }
 
-    /**
-      * @notice Cancels a proposal only if sender is the proposer, or proposer delegates dropped below proposal threshold
-      * @param proposalId The id of the proposal to cancel
-      */
-    function cancel(uint proposalId) external {
-        require(state(proposalId) != ProposalState.Executed, "GovernorOHMega::cancel: cannot cancel executed proposal");
+    function cancel(uint proposalId) public {
+        ProposalState state = state(proposalId);
+        require(state != ProposalState.Executed, "GovernorAlpha::cancel: cannot cancel executed proposal");
 
         Proposal storage proposal = proposals[proposalId];
         /// @notice change from original contract
-        require(msg.sender == proposal.proposer || gOHM.getPriorVotes(proposal.proposer, sub256(block.number, 1)) < proposal.thresholdAtStart, "GovernorOHMega::cancel: proposer above threshold");
+        require(msg.sender == guardian || gRUG.getPriorVotes(proposal.proposer, sub256(block.number, 1)) < proposal.thresholdAtStart, "GovernorAlpha::cancel: proposer above threshold");
 
         proposal.canceled = true;
         for (uint i = 0; i < proposal.targets.length; i++) {
@@ -179,12 +238,7 @@ contract GovernorRUGMegaDelegate is GovernorRUGMegaDelegateStorageV1, GovernorRU
         emit ProposalCanceled(proposalId);
     }
 
-    /**
-      * @notice Gets actions of a proposal
-      * @param proposalId the id of the proposal
-      * @return Targets, values, signatures, and calldatas of the proposal actions
-      */
-    function getActions(uint proposalId) external view returns (address[] memory targets, uint[] memory values, string[] memory signatures, bytes[] memory calldatas) {
+    function getActions(uint proposalId) public view returns (address[] memory targets, uint[] memory values, string[] memory signatures, bytes[] memory calldatas) {
         Proposal storage p = proposals[proposalId];
         return (p.targets, p.values, p.signatures, p.calldatas);
     }
@@ -195,27 +249,16 @@ contract GovernorRUGMegaDelegate is GovernorRUGMegaDelegateStorageV1, GovernorRU
       * @return votes
       */
       /// @notice change from original contract
-    function getVotesFromPercentOfsOHMSupply(uint percent) public view returns (uint256 votes) {
-        return gOHM.balanceTo(div256(mul256(sOHM.circulatingSupply(), percent), 1e6)); 
+    function getVotesFromPercentOfsRUGSupply(uint percent) public view returns (uint256 votes) {
+        return gRUG.balanceTo(div256(mul256(sRUG.circulatingSupply(), percent), 1e6)); 
     }
 
-    /**
-      * @notice Gets the receipt for a voter on a given proposal
-      * @param proposalId the id of proposal
-      * @param voter The address of the voter
-      * @return The voting receipt
-      */
-    function getReceipt(uint proposalId, address voter) external view returns (Receipt memory) {
+    function getReceipt(uint proposalId, address voter) public view returns (Receipt memory) {
         return proposals[proposalId].receipts[voter];
     }
 
-    /**
-      * @notice Gets the state of a proposal
-      * @param proposalId The id of the proposal
-      * @return Proposal state
-      */
     function state(uint proposalId) public view returns (ProposalState) {
-        require(proposalCount >= proposalId && proposalId > initialProposalId, "GovernorOHMega::state: invalid proposal id");
+        require(proposalCount >= proposalId && proposalId > 0, "GovernorAlpha::state: invalid proposal id");
         Proposal storage proposal = proposals[proposalId];
         if (proposal.canceled) {
             return ProposalState.Canceled;
@@ -237,161 +280,58 @@ contract GovernorRUGMegaDelegate is GovernorRUGMegaDelegateStorageV1, GovernorRU
         }
     }
 
-    /**
-      * @notice Cast a vote for a proposal
-      * @param proposalId The id of the proposal to vote on
-      * @param support The support value for the vote. 0=against, 1=for, 2=abstain
-      */
-    function castVote(uint proposalId, uint8 support) external {
-        emit VoteCast(msg.sender, proposalId, support, castVoteInternal(msg.sender, proposalId, support), "");
+    function castVote(uint proposalId, bool support) public {
+        return _castVote(msg.sender, proposalId, support);
     }
 
-    /**
-      * @notice Cast a vote for a proposal with a reason
-      * @param proposalId The id of the proposal to vote on
-      * @param support The support value for the vote. 0=against, 1=for, 2=abstain
-      * @param reason The reason given for the vote by the voter
-      */
-    function castVoteWithReason(uint proposalId, uint8 support, string calldata reason) external {
-        emit VoteCast(msg.sender, proposalId, support, castVoteInternal(msg.sender, proposalId, support), reason);
-    }
-
-    /**
-      * @notice Cast a vote for a proposal by signature
-      * @dev External function that accepts EIP-712 signatures for voting on proposals.
-      */
-    function castVoteBySig(uint proposalId, uint8 support, uint8 v, bytes32 r, bytes32 s) external {
-        bytes32 domainSeparator = keccak256(abi.encode(DOMAIN_TYPEHASH, keccak256(bytes(name)), getChainIdInternal(), address(this)));
+    function castVoteBySig(uint proposalId, bool support, uint8 v, bytes32 r, bytes32 s) public {
+        bytes32 domainSeparator = keccak256(abi.encode(DOMAIN_TYPEHASH, keccak256(bytes(name)), getChainId(), address(this)));
         bytes32 structHash = keccak256(abi.encode(BALLOT_TYPEHASH, proposalId, support));
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSeparator, structHash));
         address signatory = ecrecover(digest, v, r, s);
-        require(signatory != address(0), "GovernorOHMega::castVoteBySig: invalid signature");
-        emit VoteCast(signatory, proposalId, support, castVoteInternal(signatory, proposalId, support), "");
+        require(signatory != address(0), "GovernorAlpha::castVoteBySig: invalid signature");
+        return _castVote(signatory, proposalId, support);
     }
 
-    /**
-      * @notice Internal function that caries out voting logic
-      * @param voter The voter that is casting their vote
-      * @param proposalId The id of the proposal to vote on
-      * @param support The support value for the vote. 0=against, 1=for, 2=abstain
-      * @return The number of votes cast
-      */
-    function castVoteInternal(address voter, uint proposalId, uint8 support) internal returns (uint) {
-        require(state(proposalId) == ProposalState.Active, "GovernorOHMega::castVoteInternal: voting is closed");
-        require(support <= 2, "GovernorOHMega::castVoteInternal: invalid vote type");
+    function _castVote(address voter, uint proposalId, bool support) internal {
+        require(state(proposalId) == ProposalState.Active, "GovernorAlpha::_castVote: voting is closed");
         Proposal storage proposal = proposals[proposalId];
         Receipt storage receipt = proposal.receipts[voter];
-        require(receipt.hasVoted == false, "GovernorOHMega::castVoteInternal: voter already voted");
+        require(receipt.hasVoted == false, "GovernorAlpha::_castVote: voter already voted");
         /// @notice change from original contract
-        uint votes = gOHM.getPriorVotes(voter, proposal.startBlock);
+        uint votes = gRUG.getPriorVotes(voter, proposal.startBlock);
 
-        if (support == 0) {
-            proposal.againstVotes = add256(proposal.againstVotes, votes);
-        } else if (support == 1) {
+        if (support) {
             proposal.forVotes = add256(proposal.forVotes, votes);
-        } else if (support == 2) {
-            proposal.abstainVotes = add256(proposal.abstainVotes, votes);
+        } else {
+            proposal.againstVotes = add256(proposal.againstVotes, votes);
         }
 
         receipt.hasVoted = true;
         receipt.support = support;
         receipt.votes = votes;
 
-        return votes;
+        emit VoteCast(voter, proposalId, support, votes);
     }
 
-    /**
-      * @notice Admin function for setting the voting delay
-      * @param newVotingDelay new voting delay, in blocks
-      */
-    function _setVotingDelay(uint newVotingDelay) external {
-        require(msg.sender == admin, "GovernorOHMega::_setVotingDelay: admin only");
-        require(newVotingDelay >= MIN_VOTING_DELAY && newVotingDelay <= MAX_VOTING_DELAY, "GovernorOHMega::_setVotingDelay: invalid voting delay");
-        uint oldVotingDelay = votingDelay;
-        votingDelay = newVotingDelay;
-
-        emit VotingDelaySet(oldVotingDelay,votingDelay);
-    }
-
-    /**
-      * @notice Admin function for setting the voting period
-      * @param newVotingPeriod new voting period, in blocks
-      */
-    function _setVotingPeriod(uint newVotingPeriod) external {
-        require(msg.sender == admin, "GovernorOHMega::_setVotingPeriod: admin only");
-        require(newVotingPeriod >= MIN_VOTING_PERIOD && newVotingPeriod <= MAX_VOTING_PERIOD, "GovernorOHMega::_setVotingPeriod: invalid voting period");
-        uint oldVotingPeriod = votingPeriod;
-        votingPeriod = newVotingPeriod;
-
-        emit VotingPeriodSet(oldVotingPeriod, votingPeriod);
-    }
-
-    /**
-      * @notice Admin function for setting the proposal threshold
-      * @dev newProposalThreshold must be greater than the hardcoded min
-      * @param newProposalThreshold new proposal threshold
-      */
-    function _setProposalThreshold(uint newProposalThreshold) external {
-        require(msg.sender == admin, "GovernorOHMega::_setProposalThreshold: admin only");
-        require(newProposalThreshold >= MIN_PROPOSAL_THRESHOLDPERCENT && newProposalThreshold <= MAX_PROPOSAL_THRESHOLDPERCENT, "GovernorOHMega::_setProposalThreshold: invalid proposal threshold");
-        uint oldProposalThreshold = proposalThreshold;
-        proposalThreshold = newProposalThreshold;
-
-        emit ProposalThresholdSet(oldProposalThreshold, proposalThreshold);
-    }
-
-    /**
-      * @notice Initiate the GovernorOHMega contract
-      * @dev Admin only. Sets initial proposal id which initiates the contract, ensuring a continuous proposal id count
-      * @param governorAlpha The address for the Governor to continue the proposal id count from
-      */
-    function _initiate(address governorAlpha) external {
-        require(msg.sender == admin, "GovernorOHMega::_initiate: admin only");
-        require(initialProposalId == 0, "GovernorOHMega::_initiate: can only initiate once");
-        proposalCount = GovernorAlpha(governorAlpha).proposalCount();
-        initialProposalId = proposalCount;
+    function __acceptAdmin() public {
+        require(msg.sender == guardian, "GovernorAlpha::__acceptAdmin: sender must be gov guardian");
         timelock.acceptAdmin();
     }
 
-    /**
-      * @notice Begins transfer of admin rights. The newPendingAdmin must call `_acceptAdmin` to finalize the transfer.
-      * @dev Admin function to begin change of admin. The newPendingAdmin must call `_acceptAdmin` to finalize the transfer.
-      * @param newPendingAdmin New pending admin.
-      */
-    function _setPendingAdmin(address newPendingAdmin) external {
-        // Check caller = admin
-        require(msg.sender == admin, "GovernorOHMega:_setPendingAdmin: admin only");
-
-        // Save current value, if any, for inclusion in log
-        address oldPendingAdmin = pendingAdmin;
-
-        // Store pendingAdmin with value newPendingAdmin
-        pendingAdmin = newPendingAdmin;
-
-        // Emit NewPendingAdmin(oldPendingAdmin, newPendingAdmin)
-        emit NewPendingAdmin(oldPendingAdmin, newPendingAdmin);
+    function __abdicate() public {
+        require(msg.sender == guardian, "GovernorAlpha::__abdicate: sender must be gov guardian");
+        guardian = address(0);
     }
 
-    /**
-      * @notice Accepts transfer of admin rights. msg.sender must be pendingAdmin
-      * @dev Admin function for pending admin to accept role and update admin
-      */
-    function _acceptAdmin() external {
-        // Check caller is pendingAdmin and pendingAdmin ≠ address(0)
-        require(msg.sender == pendingAdmin && msg.sender != address(0), "GovernorOHMega:_acceptAdmin: pending admin only");
+    function __queueSetTimelockPendingAdmin(address newPendingAdmin, uint eta) public {
+        require(msg.sender == guardian, "GovernorAlpha::__queueSetTimelockPendingAdmin: sender must be gov guardian");
+        timelock.queueTransaction(address(timelock), 0, "setPendingAdmin(address)", abi.encode(newPendingAdmin), eta);
+    }
 
-        // Save current values for inclusion in log
-        address oldAdmin = admin;
-        address oldPendingAdmin = pendingAdmin;
-
-        // Store admin with value pendingAdmin
-        admin = pendingAdmin;
-
-        // Clear the pending value
-        pendingAdmin = address(0);
-
-        emit NewAdmin(oldAdmin, admin);
-        emit NewPendingAdmin(oldPendingAdmin, pendingAdmin);
+    function __executeSetTimelockPendingAdmin(address newPendingAdmin, uint eta) public {
+        require(msg.sender == guardian, "GovernorAlpha::__executeSetTimelockPendingAdmin: sender must be gov guardian");
+        timelock.executeTransaction(address(timelock), 0, "setPendingAdmin(address)", abi.encode(newPendingAdmin), eta);
     }
 
     function add256(uint256 a, uint256 b) internal pure returns (uint) {
@@ -424,9 +364,30 @@ contract GovernorRUGMegaDelegate is GovernorRUGMegaDelegateStorageV1, GovernorRU
         return c;
     }
 
-    function getChainIdInternal() internal pure returns (uint) {
+    function getChainId() internal pure returns (uint) {
         uint chainId;
         assembly { chainId := chainid() }
         return chainId;
     }
+}
+
+interface TimelockInterface {
+    function delay() external view returns (uint);
+    function GRACE_PERIOD() external view returns (uint);
+    function acceptAdmin() external;
+    function queuedTransactions(bytes32 hash) external view returns (bool);
+    function queueTransaction(address target, uint value, string calldata signature, bytes calldata data, uint eta) external returns (bytes32);
+    function cancelTransaction(address target, uint value, string calldata signature, bytes calldata data, uint eta) external;
+    function executeTransaction(address target, uint value, string calldata signature, bytes calldata data, uint eta) external payable returns (bytes memory);
+}
+
+/// @notice change from original contract
+interface gRUGInterface {
+    function getPriorVotes(address account, uint blockNumber) external view returns (uint);
+    function balanceTo( uint _amount ) external view returns ( uint );
+}
+
+/// @notice change from original contract
+interface sRUGInterface {
+    function circulatingSupply() external view returns ( uint );
 }
