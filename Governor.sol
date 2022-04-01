@@ -3,7 +3,7 @@ pragma experimental ABIEncoderV2;
 
 contract GovernorAlpha {
     /// @notice The name of this contract
-    string public constant name = "Olympus Governor RUG";
+    string public constant name = "Governor RUG";
 
     /// @notice The percent of sRUG in support of a proposal required in order for a quorum to be reached and for a vote to succeed
     /// @notice change from original contract
@@ -22,7 +22,7 @@ contract GovernorAlpha {
     /// @notice The duration of voting on a proposal, in blocks
     function votingPeriod() public pure returns (uint) { return 17280; } // ~3 days in blocks (assuming 15s blocks)
 
-    /// @notice The address of the Olympus Protocol Timelock
+    /// @notice The address of the RUGenerous Protocol Timelock
     TimelockInterface public timelock;
 
     /// @notice The address of the gRUG token
